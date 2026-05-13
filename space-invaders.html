@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Space Invaders</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #050510;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Courier New', monospace;
+    color: #eee;
+  }
+  #hud {
+    display: flex;
+    justify-content: space-between;
+    width: 600px;
+    padding: 8px 4px;
+    font-size: 15px;
+    letter-spacing: 1px;
+  }
+  #hud span { color: #a0c4ff; }
+  #wrapper {
+    position: relative;
+    width: 600px;
+    height: 540px;
+  }
+  canvas {
+    display: block;
+    background: #050510;
+    border: 2px solid #1a1a3a;
+    border-radius: 4px;
+  }
+  #overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(5, 5, 16, 0.88);
+    border-radius: 4px;
+    gap: 14px;
+  }
+  #overlay h1 { font-size: 34px; color: #a0c4ff; letter-spacing: 4px; }
+  #overlay p  { font-size: 14px; color: #888; }
+  #overlay .big { font-size: 20px; color: #ffd6a5; }
+  #overlay.hidden { display: none; }
+  #stars { position: absolute; inset: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div>PUAN: <span id="scoreVal">0</span></div>
+  <div>WAVE: <span id="waveVal">1</span></div>
+  <div>CAN: <span id="livesVal">❤️❤️❤️</span></div>
+</div>
+
+<div id="wrapper">
+  <canvas id="c" width="600" height="540"></canvas>
+  <div id="overlay">
+    <h1 id="overlayTitle">SPACE INVADERS</h1>
+    <p class="big" id="overlayScore" style="display:none"></p>
+    <p id="overlayMsg">SPACE veya tıkla ile başla</p>
+    <p style="color:#444;font-size:13px">← → hareket &nbsp;|&nbsp; SPACE ateş</p>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const overlay      = document.getElementById('overlay');
+const overlayTitle = document.getElementById('overlayTitle');
+const overlayMsg   = document.getElementById('overlayMsg');
+const overlayScore = document.getElementById('overlayScore');
+const scoreEl = document.getElementById('scoreVal');
+const waveEl  = document.getElementById('waveVal');
+const livesEl = document.getElementById('livesVal');
+
+const W = 600, H = 540;
+
+// alien grid
+const COLS = 11, ROWS = 4;
+const AW = 32, AH = 22, APADX = 14, APADY = 12;
+const GRID_W = COLS * (AW + APADX) - APADX;
+const GRID_STARTX = (W - GRID_W) / 2;
+const GRID_STARTY = 70;
+
+// alien types by row
+const ALIEN_COLORS = ['#ff6b6b','#ff6b6b','#ffa94d','#ffa94d'];
+const ALIEN_PTS    = [30, 30, 20, 20];
+
+// player
+const PLAYER_W = 40, PLAYER_H = 22;
+const PLAYER_Y = H - 50;
+const PLAYER_SPD = 5;
+
+// bullet
+const BULL_W = 3, BULL_H = 14, PLAYER_BULL_SPD = 9;
+const ENEMY_BULL_SPD = 3.5;
+
+// shields
+const SHIELD_ROWS = 3, SHIELD_COLS = 10;
+const SHIELD_CELL = 6; // px per cell
+
+// game loop timing
+const ENEMY_MOVE_INTERVAL_BASE = 700; // ms
+const ENEMY_SHOOT_INTERVAL_BASE = 900; // ms
+
+let state = 'idle';
+let score, lives, wave;
+let player, aliens, shields;
+let playerBullet, enemyBullets;
+let alienDir, alienStepDown;
+let lastMoveTime, lastShootTime, moveInterval, shootInterval;
+let alienCount;
+
+// ---- init ----
+function makeShields() {
+  const list = [];
+  const total = 3;
+  const gap   = W / (total + 1);
+  for (let s = 0; s < total; s++) {
+    const sx = gap * (s + 1) - (SHIELD_COLS * SHIELD_CELL) / 2;
+    const sy = H - 110;
+    const cells = [];
+    for (let r = 0; r < SHIELD_ROWS; r++) {
+      for (let c = 0; c < SHIELD_COLS; c++) {
+        // arch shape: remove top corners
+        const skip = (r === 0 && (c < 2 || c >= SHIELD_COLS - 2));
+        cells.push({ alive: !skip });
+      }
+    }
+    list.push({ x: sx, y: sy, cells });
+  }
+  return list;
+}
+
+function makeAliens() {
+  const list = [];
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      list.push({
+        row: r, col: c,
+        x: GRID_STARTX + c * (AW + APADX),
+        y: GRID_STARTY + r * (AH + APADY),
+        alive: true,
+        color: ALIEN_COLORS[r],
+        pts:   ALIEN_PTS[r],
+        frame: 0
+      });
+    }
+  }
+  return list;
+}
+
+function initGame() {
+  score  = 0;
+  lives  = 3;
+  wave   = 1;
+  player = { x: W / 2 - PLAYER_W / 2, flash: 0 };
+  aliens = makeAliens();
+  shields = makeShields();
+  playerBullet = null;
+  enemyBullets = [];
+  alienDir     = 1;
+  alienStepDown = false;
+  alienCount   = COLS * ROWS;
+  moveInterval  = ENEMY_MOVE_INTERVAL_BASE;
+  shootInterval = ENEMY_SHOOT_INTERVAL_BASE;
+  lastMoveTime  = performance.now();
+  lastShootTime = performance.now();
+  updateHUD();
+}
+
+function nextWave() {
+  wave++;
+  aliens = makeAliens();
+  shields = makeShields();
+  playerBullet = null;
+  enemyBullets = [];
+  alienDir     = 1;
+  alienStepDown = false;
+  alienCount   = COLS * ROWS;
+  moveInterval  = Math.max(200, ENEMY_MOVE_INTERVAL_BASE - (wave - 1) * 80);
+  shootInterval = Math.max(400, ENEMY_SHOOT_INTERVAL_BASE - (wave - 1) * 80);
+  lastMoveTime  = performance.now();
+  lastShootTime = performance.now();
+  updateHUD();
+}
+
+function updateHUD() {
+  scoreEl.textContent = score;
+  waveEl.textContent  = wave;
+  livesEl.textContent = '❤️'.repeat(Math.max(0, lives));
+}
+
+function showOverlay(title, msg, showScore) {
+  overlay.classList.remove('hidden');
+  overlayTitle.textContent = title;
+  overlayMsg.textContent   = msg;
+  if (showScore) {
+    overlayScore.style.display = '';
+    overlayScore.textContent   = 'PUAN: ' + score;
+  } else {
+    overlayScore.style.display = 'none';
+  }
+}
+function hideOverlay() { overlay.classList.add('hidden'); }
+
+// ---- input ----
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space') {
+    e.preventDefault();
+    handleStart();
+    if (state === 'playing') shoot();
+  }
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+overlay.addEventListener('click', handleStart);
+canvas.addEventListener('click', handleStart);
+
+function handleStart() {
+  if (state === 'idle' || state === 'gameover') {
+    initGame();
+    hideOverlay();
+    state = 'playing';
+  } else if (state === 'waveup') {
+    nextWave();
+    hideOverlay();
+    state = 'playing';
+  } else if (state === 'dead') {
+    playerBullet = null;
+    enemyBullets = [];
+    hideOverlay();
+    state = 'playing';
+  }
+}
+
+function shoot() {
+  if (playerBullet) return;
+  playerBullet = {
+    x: player.x + PLAYER_W / 2 - BULL_W / 2,
+    y: PLAYER_Y - BULL_H,
+    dy: -PLAYER_BULL_SPD
+  };
+}
+
+// ---- logic ----
+let lastFrame = performance.now();
+function step(now) {
+  if (state !== 'playing') return;
+  const dt = now - lastFrame;
+
+  // player move
+  if (keys['ArrowLeft'])  player.x -= PLAYER_SPD;
+  if (keys['ArrowRight']) player.x += PLAYER_SPD;
+  player.x = Math.max(0, Math.min(W - PLAYER_W, player.x));
+  if (player.flash > 0) player.flash--;
+
+  // alien move
+  if (now - lastMoveTime > moveInterval) {
+    lastMoveTime = now;
+    let hitWall = false;
+    for (const a of aliens) {
+      if (!a.alive) continue;
+      a.x += alienDir * 14;
+      if (a.x <= 0 || a.x + AW >= W) hitWall = true;
+      a.frame ^= 1;
+    }
+    if (hitWall) {
+      alienDir *= -1;
+      for (const a of aliens) {
+        if (a.alive) a.y += 16;
+      }
+      // speed up slightly per move hit
+      moveInterval = Math.max(80, moveInterval - 5);
+    }
+    // check if any alien reached player line
+    for (const a of aliens) {
+      if (a.alive && a.y + AH >= PLAYER_Y) {
+        lives = 0;
+        updateHUD();
+        state = 'gameover';
+        showOverlay('GAME OVER', 'SPACE veya tıkla ile yeniden başla', true);
+        return;
+      }
+    }
+  }
+
+  // enemy shoot
+  if (now - lastShootTime > shootInterval) {
+    lastShootTime = now;
+    const shooters = aliens.filter(a => a.alive);
+    if (shooters.length) {
+      const shooter = shooters[Math.floor(Math.random() * shooters.length)];
+      enemyBullets.push({
+        x: shooter.x + AW / 2 - BULL_W / 2,
+        y: shooter.y + AH,
+        dy: ENEMY_BULL_SPD
+      });
+    }
+  }
+
+  // player bullet
+  if (playerBullet) {
+    playerBullet.y += playerBullet.dy;
+    if (playerBullet.y + BULL_H < 0) { playerBullet = null; }
+    else {
+      // vs aliens
+      let hit = false;
+      for (const a of aliens) {
+        if (!a.alive) continue;
+        if (rectsOverlap(playerBullet.x, playerBullet.y, BULL_W, BULL_H, a.x, a.y, AW, AH)) {
+          a.alive = false;
+          alienCount--;
+          score += a.pts;
+          updateHUD();
+          playerBullet = null;
+          hit = true;
+          break;
+        }
+      }
+      // vs shields
+      if (!hit && playerBullet) {
+        hit = damageShields(playerBullet.x, playerBullet.y, BULL_W, BULL_H);
+        if (hit) playerBullet = null;
+      }
+    }
+  }
+
+  // enemy bullets
+  for (let i = enemyBullets.length - 1; i >= 0; i--) {
+    const b = enemyBullets[i];
+    b.y += b.dy;
+    if (b.y > H) { enemyBullets.splice(i, 1); continue; }
+
+    // vs player
+    if (
+      player.flash === 0 &&
+      rectsOverlap(b.x, b.y, BULL_W, BULL_H, player.x, PLAYER_Y, PLAYER_W, PLAYER_H)
+    ) {
+      enemyBullets.splice(i, 1);
+      lives--;
+      player.flash = 80;
+      updateHUD();
+      if (lives <= 0) {
+        state = 'gameover';
+        showOverlay('GAME OVER', 'SPACE veya tıkla ile yeniden başla', true);
+        return;
+      } else {
+        state = 'dead';
+        showOverlay('CAN KAYBETTİN', 'SPACE veya tıkla ile devam et', false);
+        return;
+      }
+    }
+    // vs shields
+    if (damageShields(b.x, b.y, BULL_W, BULL_H)) {
+      enemyBullets.splice(i, 1);
+    }
+  }
+
+  // all aliens dead
+  if (alienCount <= 0) {
+    state = 'waveup';
+    showOverlay('WAVE ' + (wave + 1), 'SPACE veya tıkla ile devam et', false);
+  }
+}
+
+function rectsOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+}
+
+function damageShields(bx, by, bw, bh) {
+  for (const sh of shields) {
+    for (let i = 0; i < sh.cells.length; i++) {
+      const cell = sh.cells[i];
+      if (!cell.alive) continue;
+      const r = Math.floor(i / SHIELD_COLS);
+      const c = i % SHIELD_COLS;
+      const cx = sh.x + c * SHIELD_CELL;
+      const cy = sh.y + r * SHIELD_CELL;
+      if (rectsOverlap(bx, by, bw, bh, cx, cy, SHIELD_CELL, SHIELD_CELL)) {
+        cell.alive = false;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// ---- draw ----
+function drawAlien(x, y, color, frame) {
+  ctx.fillStyle = color;
+  if (frame === 0) {
+    // pose A
+    ctx.fillRect(x+2, y,    28, 6);
+    ctx.fillRect(x,   y+6,  32, 8);
+    ctx.fillRect(x+4, y+14, 8, 6);
+    ctx.fillRect(x+20,y+14, 8, 6);
+    ctx.fillRect(x,   y+6,  6, 4);
+    ctx.fillRect(x+26,y+6,  6, 4);
+  } else {
+    // pose B (slight alt)
+    ctx.fillRect(x+2, y+2,  28, 5);
+    ctx.fillRect(x,   y+7,  32, 8);
+    ctx.fillRect(x+4, y+15, 8, 5);
+    ctx.fillRect(x+20,y+15, 8, 5);
+    ctx.fillRect(x+2, y+4,  5, 4);
+    ctx.fillRect(x+25,y+4,  5, 4);
+  }
+  // eyes
+  ctx.fillStyle = '#050510';
+  ctx.fillRect(x+9, y+8, 4, 4);
+  ctx.fillRect(x+19,y+8, 4, 4);
+}
+
+function drawPlayer(x, flash) {
+  const alpha = flash > 0 ? (flash % 10 < 5 ? 0.3 : 1) : 1;
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#69db7c';
+  // body
+  ctx.beginPath();
+  ctx.roundRect(x, PLAYER_Y + 8, PLAYER_W, PLAYER_H - 8, 3);
+  ctx.fill();
+  // cannon
+  ctx.fillRect(x + PLAYER_W / 2 - 3, PLAYER_Y, 6, 12);
+  ctx.globalAlpha = 1;
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  // stars
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  for (const s of STARS) ctx.fillRect(s.x, s.y, s.sz, s.sz);
+
+  // shields
+  ctx.fillStyle = '#51cf66';
+  for (const sh of shields) {
+    for (let i = 0; i < sh.cells.length; i++) {
+      if (!sh.cells[i].alive) continue;
+      const r = Math.floor(i / SHIELD_COLS);
+      const c = i % SHIELD_COLS;
+      ctx.fillRect(sh.x + c * SHIELD_CELL, sh.y + r * SHIELD_CELL, SHIELD_CELL - 1, SHIELD_CELL - 1);
+    }
+  }
+
+  // aliens
+  for (const a of aliens) {
+    if (!a.alive) continue;
+    drawAlien(a.x, a.y, a.color, a.frame);
+  }
+
+  // player
+  if (state === 'playing' || state === 'dead') drawPlayer(player.x, player.flash);
+
+  // player bullet
+  if (playerBullet) {
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(playerBullet.x, playerBullet.y, BULL_W, BULL_H);
+  }
+
+  // enemy bullets
+  ctx.fillStyle = '#ff6b6b';
+  for (const b of enemyBullets) ctx.fillRect(b.x, b.y, BULL_W, BULL_H);
+
+  // ground line
+  ctx.strokeStyle = '#1a1a4a';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, H - 20);
+  ctx.lineTo(W, H - 20);
+  ctx.stroke();
+}
+
+// static stars
+const STARS = Array.from({length: 80}, () => ({
+  x: Math.random() * W,
+  y: Math.random() * H,
+  sz: Math.random() < 0.2 ? 2 : 1
+}));
+
+// static preview
+player  = { x: W / 2 - PLAYER_W / 2, flash: 0 };
+aliens  = makeAliens();
+shields = makeShields();
+playerBullet = null; enemyBullets = [];
+alienCount = COLS * ROWS;
+draw();
+
+function loop(now) {
+  step(now);
+  draw();
+  lastFrame = now;
+  requestAnimationFrame(loop);
+}
+showOverlay('SPACE INVADERS', 'SPACE veya tıkla ile başla', false);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
