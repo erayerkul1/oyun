@@ -51,6 +51,17 @@
   #overlay p  { font-size: 15px; color: #aaa; }
   #overlay .score-display { font-size: 22px; color: #ffd6a5; }
   #overlay.hidden { display: none; }
+  /* power-up legend */
+  #legend {
+    display: flex;
+    gap: 18px;
+    width: 600px;
+    padding: 5px 4px 0;
+    font-size: 12px;
+    color: #555;
+    letter-spacing: 0.5px;
+  }
+  #legend span { margin-right: 3px; }
 </style>
 </head>
 <body>
@@ -69,6 +80,11 @@
     <p id="overlayMsg">SPACE veya tıkla ile başla</p>
     <p style="color:#666;font-size:13px">← → veya fare ile raket</p>
   </div>
+</div>
+<div id="legend">
+  <div><span style="color:#ff6b6b">❤</span> Can +1</div>
+  <div><span style="color:#cc5de8">⬡</span> 3'lü top</div>
+  <div><span style="color:#ffd43b">⚡</span> Hız arttır</div>
 </div>
 
 <script>
@@ -89,19 +105,30 @@ const BW = 62, BH = 20, BPAD = 6;
 const BOFFX = (W - (COLS * (BW + BPAD) - BPAD)) / 2;
 const BOFFY = 55;
 
-const ROW_COLORS  = ['#ff6b6b','#ffa94d','#ffe066','#69db7c','#74c0fc'];
-const ROW_POINTS  = [50, 40, 30, 20, 10];
+const ROW_COLORS = ['#ff6b6b','#ffa94d','#ffe066','#69db7c','#74c0fc'];
+const ROW_POINTS = [50, 40, 30, 20, 10];
 
 // paddle
 const PADDLE_W = 90, PADDLE_H = 12, PADDLE_Y = H - 35;
 
 // ball
 const BALL_R = 7;
-
 const BASE_SPEED = 4.5;
 
-let state = 'idle'; // idle | playing | dead | levelup | gameover
-let score, lives, level, bricks, ball, paddle, mouseX;
+// power-ups
+const PU_W = 22, PU_H = 14, PU_SPD = 2.2;
+const PU_DROP_CHANCE = 0.28; // 28% per brick
+const PU_TYPES = ['life', 'multi', 'speed'];
+const PU_COLOR = { life: '#ff6b6b', multi: '#cc5de8', speed: '#ffd43b' };
+const PU_LABEL = { life: '❤', multi: '⬡', speed: '⚡' };
+
+// speed boost: how many seconds it lasts
+const SPEED_BOOST_TICKS = 60 * 6; // 6 seconds at 60fps
+
+let state = 'idle';
+let score, lives, level, bricks, balls, paddle, mouseX;
+let powerups; // falling capsules
+let speedBoostTicks; // remaining frames of speed boost
 
 function makeBricks() {
   const b = [];
@@ -119,15 +146,23 @@ function makeBricks() {
   return b;
 }
 
-function launchBall() {
-  const angle = -Math.PI / 2 + (Math.random() - 0.5) * (Math.PI / 3);
-  const spd   = BASE_SPEED + (level - 1) * 0.4;
-  ball = {
-    x: paddle.x + PADDLE_W / 2,
-    y: PADDLE_Y - BALL_R - 2,
+function currentSpeed() {
+  const base = BASE_SPEED + (level - 1) * 0.4;
+  return speedBoostTicks > 0 ? base * 1.6 : base;
+}
+
+function makeBall(x, y, angle) {
+  const spd = currentSpeed();
+  return {
+    x, y,
     vx: Math.cos(angle) * spd,
     vy: Math.sin(angle) * spd
   };
+}
+
+function launchBalls() {
+  const angle = -Math.PI / 2 + (Math.random() - 0.5) * (Math.PI / 3);
+  balls = [makeBall(paddle.x + PADDLE_W / 2, PADDLE_Y - BALL_R - 2, angle)];
 }
 
 function initGame() {
@@ -136,21 +171,25 @@ function initGame() {
   level  = 1;
   paddle = { x: W / 2 - PADDLE_W / 2 };
   bricks = makeBricks();
-  launchBall();
+  powerups = [];
+  speedBoostTicks = 0;
+  launchBalls();
   updateHUD();
 }
 
 function startLevel() {
   bricks = makeBricks();
   paddle = { x: W / 2 - PADDLE_W / 2 };
-  launchBall();
+  powerups = [];
+  speedBoostTicks = 0;
+  launchBalls();
   updateHUD();
 }
 
 function updateHUD() {
   scoreEl.textContent = score;
   levelEl.textContent = level;
-  livesEl.textContent = '❤️'.repeat(lives);
+  livesEl.textContent = '❤️'.repeat(Math.max(0, lives));
 }
 
 function showOverlay(title, msg, showScore) {
@@ -164,19 +203,13 @@ function showOverlay(title, msg, showScore) {
     overlayScore.style.display = 'none';
   }
 }
-
-function hideOverlay() {
-  overlay.classList.add('hidden');
-}
+function hideOverlay() { overlay.classList.add('hidden'); }
 
 // ---- input ----
-let keys = {};
+const keys = {};
 window.addEventListener('keydown', e => {
   keys[e.code] = true;
-  if (e.code === 'Space') {
-    e.preventDefault();
-    handleStart();
-  }
+  if (e.code === 'Space') { e.preventDefault(); handleStart(); }
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 canvas.addEventListener('mousemove', e => {
@@ -188,89 +221,134 @@ overlay.addEventListener('click', handleStart);
 
 function handleStart() {
   if (state === 'idle' || state === 'gameover') {
-    initGame();
-    hideOverlay();
-    state = 'playing';
+    initGame(); hideOverlay(); state = 'playing';
   } else if (state === 'levelup') {
-    level++;
-    startLevel();
-    hideOverlay();
-    state = 'playing';
+    level++; startLevel(); hideOverlay(); state = 'playing';
   } else if (state === 'dead') {
-    launchBall();
-    hideOverlay();
-    state = 'playing';
+    launchBalls(); hideOverlay(); state = 'playing';
+  }
+}
+
+// ---- power-up effects ----
+function applyPowerup(type) {
+  if (type === 'life') {
+    lives = Math.min(lives + 1, 9);
+    updateHUD();
+  } else if (type === 'multi') {
+    const extra = [];
+    for (const b of balls) {
+      const spd   = Math.hypot(b.vx, b.vy);
+      const baseA = Math.atan2(b.vy, b.vx);
+      extra.push(makeBall(b.x, b.y, baseA - 0.4));
+      extra.push(makeBall(b.x, b.y, baseA + 0.4));
+    }
+    balls.push(...extra);
+  } else if (type === 'speed') {
+    speedBoostTicks = SPEED_BOOST_TICKS;
+    // boost existing ball speeds
+    for (const b of balls) {
+      const spd = Math.hypot(b.vx, b.vy);
+      const a   = Math.atan2(b.vy, b.vx);
+      const newSpd = currentSpeed();
+      b.vx = Math.cos(a) * newSpd;
+      b.vy = Math.sin(a) * newSpd;
+    }
   }
 }
 
 // ---- physics ----
-function step() {
-  if (state !== 'playing') return;
+function moveBall(b) {
+  b.x += b.vx;
+  b.y += b.vy;
 
-  // paddle movement
-  const PADDLE_SPD = 6;
-  if (keys['ArrowLeft'])  paddle.x -= PADDLE_SPD;
-  if (keys['ArrowRight']) paddle.x += PADDLE_SPD;
-  if (mouseX !== undefined) {
-    paddle.x = mouseX - PADDLE_W / 2;
-  }
-  paddle.x = Math.max(0, Math.min(W - PADDLE_W, paddle.x));
+  if (b.x - BALL_R < 0)  { b.x = BALL_R;     b.vx = Math.abs(b.vx); }
+  if (b.x + BALL_R > W)  { b.x = W - BALL_R; b.vx = -Math.abs(b.vx); }
+  if (b.y - BALL_R < 0)  { b.y = BALL_R;     b.vy = Math.abs(b.vy); }
 
-  // ball movement
-  ball.x += ball.vx;
-  ball.y += ball.vy;
-
-  // wall collisions
-  if (ball.x - BALL_R < 0)     { ball.x = BALL_R;     ball.vx = Math.abs(ball.vx); }
-  if (ball.x + BALL_R > W)     { ball.x = W - BALL_R; ball.vx = -Math.abs(ball.vx); }
-  if (ball.y - BALL_R < 0)     { ball.y = BALL_R;     ball.vy = Math.abs(ball.vy); }
-
-  // paddle collision
+  // paddle
   if (
-    ball.vy > 0 &&
-    ball.y + BALL_R >= PADDLE_Y &&
-    ball.y + BALL_R <= PADDLE_Y + PADDLE_H &&
-    ball.x >= paddle.x &&
-    ball.x <= paddle.x + PADDLE_W
+    b.vy > 0 &&
+    b.y + BALL_R >= PADDLE_Y &&
+    b.y + BALL_R <= PADDLE_Y + PADDLE_H &&
+    b.x >= paddle.x &&
+    b.x <= paddle.x + PADDLE_W
   ) {
-    ball.y = PADDLE_Y - BALL_R;
-    // angle based on hit position
-    const rel = (ball.x - (paddle.x + PADDLE_W / 2)) / (PADDLE_W / 2);
+    b.y = PADDLE_Y - BALL_R;
+    const rel   = (b.x - (paddle.x + PADDLE_W / 2)) / (PADDLE_W / 2);
     const angle = rel * (Math.PI / 3);
-    const spd = Math.hypot(ball.vx, ball.vy);
-    ball.vx = Math.sin(angle) * spd;
-    ball.vy = -Math.cos(angle) * spd;
+    const spd   = Math.hypot(b.vx, b.vy);
+    b.vx = Math.sin(angle) * spd;
+    b.vy = -Math.cos(angle) * spd;
   }
 
-  // brick collisions
+  // bricks
   for (const br of bricks) {
     if (!br.alive) continue;
     if (
-      ball.x + BALL_R > br.x &&
-      ball.x - BALL_R < br.x + BW &&
-      ball.y + BALL_R > br.y &&
-      ball.y - BALL_R < br.y + BH
+      b.x + BALL_R > br.x &&
+      b.x - BALL_R < br.x + BW &&
+      b.y + BALL_R > br.y &&
+      b.y - BALL_R < br.y + BH
     ) {
       br.alive = false;
       score += br.pts;
       updateHUD();
 
-      // which side?
-      const overlapL = (ball.x + BALL_R) - br.x;
-      const overlapR = (br.x + BW) - (ball.x - BALL_R);
-      const overlapT = (ball.y + BALL_R) - br.y;
-      const overlapB = (br.y + BH) - (ball.y - BALL_R);
-      const minH = Math.min(overlapL, overlapR);
-      const minV = Math.min(overlapT, overlapB);
-      if (minH < minV) ball.vx = -ball.vx;
-      else             ball.vy = -ball.vy;
+      // maybe drop power-up
+      if (Math.random() < PU_DROP_CHANCE) {
+        const type = PU_TYPES[Math.floor(Math.random() * PU_TYPES.length)];
+        powerups.push({
+          x: br.x + BW / 2 - PU_W / 2,
+          y: br.y + BH / 2,
+          type
+        });
+      }
+
+      const overlapL = (b.x + BALL_R) - br.x;
+      const overlapR = (br.x + BW) - (b.x - BALL_R);
+      const overlapT = (b.y + BALL_R) - br.y;
+      const overlapB = (br.y + BH) - (b.y - BALL_R);
+      if (Math.min(overlapL, overlapR) < Math.min(overlapT, overlapB)) b.vx = -b.vx;
+      else b.vy = -b.vy;
       break;
     }
   }
+}
 
-  // ball fell off
-  if (ball.y - BALL_R > H) {
+function step() {
+  if (state !== 'playing') return;
+
+  // speed boost countdown
+  if (speedBoostTicks > 0) {
+    speedBoostTicks--;
+    if (speedBoostTicks === 0) {
+      // normalise ball speeds back
+      const normal = BASE_SPEED + (level - 1) * 0.4;
+      for (const b of balls) {
+        const a = Math.atan2(b.vy, b.vx);
+        b.vx = Math.cos(a) * normal;
+        b.vy = Math.sin(a) * normal;
+      }
+    }
+  }
+
+  // paddle movement
+  const PADDLE_SPD = 6;
+  if (keys['ArrowLeft'])  paddle.x -= PADDLE_SPD;
+  if (keys['ArrowRight']) paddle.x += PADDLE_SPD;
+  if (mouseX !== undefined) paddle.x = mouseX - PADDLE_W / 2;
+  paddle.x = Math.max(0, Math.min(W - PADDLE_W, paddle.x));
+
+  // move all balls
+  for (const b of balls) moveBall(b);
+
+  // remove fallen balls
+  const before = balls.length;
+  balls = balls.filter(b => b.y - BALL_R <= H);
+
+  if (balls.length === 0) {
     lives--;
+    powerups = [];
     updateHUD();
     if (lives <= 0) {
       state = 'gameover';
@@ -280,6 +358,24 @@ function step() {
       showOverlay('CAN KAYBETTİN', 'SPACE veya tıkla ile devam et', false);
     }
     return;
+  }
+
+  // power-up capsules
+  for (let i = powerups.length - 1; i >= 0; i--) {
+    const p = powerups[i];
+    p.y += PU_SPD;
+    // catch with paddle
+    if (
+      p.y + PU_H >= PADDLE_Y &&
+      p.y <= PADDLE_Y + PADDLE_H &&
+      p.x + PU_W >= paddle.x &&
+      p.x <= paddle.x + PADDLE_W
+    ) {
+      applyPowerup(p.type);
+      powerups.splice(i, 1);
+      continue;
+    }
+    if (p.y > H) powerups.splice(i, 1);
   }
 
   // all bricks cleared
@@ -300,36 +396,53 @@ function draw() {
     ctx.beginPath();
     ctx.roundRect(br.x, br.y, BW, BH, 3);
     ctx.fill();
-    // shine
     ctx.fillStyle = 'rgba(255,255,255,0.15)';
     ctx.beginPath();
     ctx.roundRect(br.x + 2, br.y + 2, BW - 4, 5, 2);
     ctx.fill();
   }
 
-  // paddle
+  // power-up capsules
+  for (const p of powerups) {
+    const col = PU_COLOR[p.type];
+    ctx.fillStyle = col + '33'; // dim bg
+    ctx.beginPath();
+    ctx.roundRect(p.x, p.y, PU_W, PU_H, 7);
+    ctx.fill();
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(p.x, p.y, PU_W, PU_H, 7);
+    ctx.stroke();
+    ctx.fillStyle = col;
+    ctx.font = '11px Courier New';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(PU_LABEL[p.type], p.x + PU_W / 2, p.y + PU_H / 2);
+  }
+
+  // paddle (yellow tint during speed boost)
+  const p0 = speedBoostTicks > 0 ? '#ffd43b' : '#74c0fc';
+  const p1 = speedBoostTicks > 0 ? '#f08c00' : '#339af0';
   const grad = ctx.createLinearGradient(paddle.x, PADDLE_Y, paddle.x, PADDLE_Y + PADDLE_H);
-  grad.addColorStop(0, '#74c0fc');
-  grad.addColorStop(1, '#339af0');
+  grad.addColorStop(0, p0);
+  grad.addColorStop(1, p1);
   ctx.fillStyle = grad;
   ctx.beginPath();
   ctx.roundRect(paddle.x, PADDLE_Y, PADDLE_W, PADDLE_H, 6);
   ctx.fill();
 
-  // ball
+  // balls
   if (state === 'playing') {
-    ctx.beginPath();
-    ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI * 2);
-    ctx.fillStyle = '#fff';
-    ctx.fill();
-    // glow
-    ctx.shadowColor = '#a0c4ff';
-    ctx.shadowBlur  = 10;
-    ctx.beginPath();
-    ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI * 2);
-    ctx.fillStyle = '#fff';
-    ctx.fill();
-    ctx.shadowBlur = 0;
+    for (const b of balls) {
+      ctx.shadowColor = '#a0c4ff';
+      ctx.shadowBlur  = 10;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, BALL_R, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
   }
 }
 
@@ -339,12 +452,14 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
-// init
+// static preview
 showOverlay('BREAKOUT', 'SPACE veya tıkla ile başla', false);
-paddle = { x: W / 2 - PADDLE_W / 2 };
-bricks = makeBricks();
-ball   = { x: W / 2, y: H / 2, vx: 0, vy: 0 };
-draw(); // static preview
+paddle   = { x: W / 2 - PADDLE_W / 2 };
+bricks   = makeBricks();
+balls    = [{ x: W / 2, y: H / 2, vx: 0, vy: 0 }];
+powerups = [];
+speedBoostTicks = 0;
+draw();
 requestAnimationFrame(loop);
 </script>
 </body>
