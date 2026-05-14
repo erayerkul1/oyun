@@ -226,6 +226,8 @@ function lockPiece(){
 function removeClearingRows(){
   for(const r of clearingRows.slice().reverse()){
     board.splice(r,1);
+  }
+  for(let i=0;i<clearingRows.length;i++){
     board.unshift(new Array(COLS).fill(0));
   }
   clearingRows=[];
