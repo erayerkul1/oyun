@@ -20,7 +20,7 @@
 </head>
 <body>
 <canvas id="c" width="360" height="640"></canvas>
-<div id="hint">SPACE veya tıkla ile çırp</div>
+<div id="hint">↑/SPACE çırp · ↓ dal · ← → yatay hareket · tıkla çırp</div>
 <script>
 const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d');
@@ -56,7 +56,7 @@ let bird, pipes, score, best, tick, groundX;
 let deathTimer, flashAlpha;
 
 function initGame() {
-  bird = { x: 90, y: H / 2 - 30, vy: 0, rot: 0, wingPhase: 0, flash: 0 };
+  bird = { x: 90, y: H / 2 - 30, vx: 0, vy: 0, rot: 0, wingPhase: 0, flash: 0 };
   pipes = [];
   score = 0;
   tick  = 0;
@@ -77,9 +77,13 @@ function flap() {
   }
 }
 
+const keys = {};
 window.addEventListener('keydown', e => {
-  if (e.code === 'Space') { e.preventDefault(); flap(); }
+  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
+  keys[e.code] = true;
+  if (e.code === 'Space' || e.code === 'ArrowUp') flap();
 });
+window.addEventListener('keyup', e => { keys[e.code] = false; });
 canvas.addEventListener('pointerdown', e => { e.preventDefault(); flap(); });
 
 // ── pipes ─────────────────────────────────────────────────────
@@ -121,6 +125,17 @@ function step() {
 
   tick++;
   groundX = (groundX - PIPE_SPD + 400) % 400;
+
+  // horizontal movement
+  const H_SPD = 3.2, H_FRIC = 0.82;
+  if (keys['ArrowLeft'])  bird.vx -= 0.6;
+  if (keys['ArrowRight']) bird.vx += 0.6;
+  bird.vx *= H_FRIC;
+  bird.x  += bird.vx;
+  bird.x   = Math.max(BIRD_R, Math.min(W - BIRD_R, bird.x));
+
+  // vertical: ↓ dives faster
+  if (keys['ArrowDown'] && bird.vy < 6) bird.vy += 0.8;
 
   // bird physics
   bird.vy += GRAVITY;
@@ -373,7 +388,7 @@ function draw() {
 
   // overlays
   if (state === 'idle') {
-    drawOverlay('FLAPPY BIRD', 'SPACE veya tıkla');
+    drawOverlay('FLAPPY BIRD', '↑/SPACE çırp · ↓ dal · ← → hareket');
     // animated bird preview
     const by = H / 2 + 70 + Math.sin(tick * 0.06) * 8;
     drawBird(W / 2, by, Math.sin(tick * 0.06) * 0.25, tick * 0.3);
@@ -419,7 +434,7 @@ function loop() {
 
 // init idle state
 state = 'idle';
-bird  = { x: 90, y: H / 2, vy: 0, rot: 0, wingPhase: 0 };
+bird  = { x: 90, y: H / 2, vx: 0, vy: 0, rot: 0, wingPhase: 0 };
 pipes = []; best = 0; score = 0; tick = 0; groundX = 0;
 deathTimer = 0; flashAlpha = 0;
 requestAnimationFrame(loop);
